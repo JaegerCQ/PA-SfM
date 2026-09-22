@@ -53,7 +53,7 @@ def build_default_paths(
     group_tag = f"group{group_id}"
     group_pad_tag = f"group{group_id:02d}"
 
-    file_A = Path(ref_file) if ref_file else Path(f"sensor_location_{group_pad_tag}_pose000.txt")
+    file_A = Path(ref_file) if ref_file else Path("data") / f"sensor_location_{group_pad_tag}_pose000.txt"
 
     if previous_file:
         file_B = Path(previous_file)
@@ -100,11 +100,11 @@ def build_default_paths(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pose-id", type=int, required=True, help="当前 pose ID，例如 56")
-    parser.add_argument("--target-pose-id", type=int, default=49, help="统一到哪个 pose 坐标系，默认 49")
+    parser.add_argument("--target-pose-id", type=int, default=0, help="统一到哪个 pose 坐标系，默认 0")
     parser.add_argument("--group-id", type=int, default=3, help="group ID，默认 3")
     parser.add_argument("--freq-tag", type=str, default="10MHz", help="频率标签，默认 10MHz")
 
-    parser.add_argument("--ref-file", type=str, default=None, help="A 坐标文件，默认 sensor_location_groupXX_pose000.txt")
+    parser.add_argument("--ref-file", type=str, default=None, help="A 坐标文件，默认 data/sensor_location_groupXX_pose000.txt")
     parser.add_argument("--previous-file", type=str, default=None, help="B 坐标文件，不传则自动推断前一帧")
     parser.add_argument("--current-file", type=str, default=None, help="C 坐标文件，不传则自动推断当前帧 refined 文件")
     parser.add_argument("--output", type=str, default=None, help="输出文件，不传则自动生成 transformed 文件名")

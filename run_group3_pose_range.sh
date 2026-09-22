@@ -1,6 +1,26 @@
 #!/usr/bin/env bash
 
 set -u
+# Resolve all data, Python entry points and outputs inside this package.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR" || exit 1
+
+CHECK_ONLY=0
+case "${1:-}" in
+    --check) CHECK_ONLY=1 ;;
+    --help|-h)
+        echo "Usage: bash run_group3_pose_range.sh [--check]"
+        echo "Default: poses 0..9 on one A100 (GPU 0)."
+        echo "Example: END_POSE=1 bash run_group3_pose_range.sh"
+        exit 0
+        ;;
+    "") ;;
+    *) echo "[ERROR] Unknown argument: $1" >&2; exit 1 ;;
+esac
+if [ "$#" -gt 1 ]; then
+    echo "[ERROR] Expected at most one argument (--check or --help)" >&2
+    exit 1
+fi
 export PYTHONUNBUFFERED=1
 export REPRO_SEED="${REPRO_SEED:-1013}"
 export PYTHONHASHSEED="$REPRO_SEED"
@@ -11,25 +31,67 @@ export REPRO_DETERMINISTIC_WARN_ONLY="${REPRO_DETERMINISTIC_WARN_ONLY:-1}"
 export REPRO_ALLOW_TF32="${REPRO_ALLOW_TF32:-1}"
 export REPRO_STRICT_ATOMICS="${REPRO_STRICT_ATOMICS:-1}"
 export REPRO_FIXED_POINT_SCALE="${REPRO_FIXED_POINT_SCALE:-10000000000.0}"
+export LOCALIZATION_PROJECTOR="${LOCALIZATION_PROJECTOR:-triton}"
+export TRAIN_TIME_SCATTER="${TRAIN_TIME_SCATTER:-vectorized}"
+export TRAIN_FORWARD_LAYOUT="${TRAIN_FORWARD_LAYOUT:-sensor_fast}"
+export TRAIN_BACKWARD_BACKEND="${TRAIN_BACKWARD_BACKEND:-sensor_tiled}"
 
 # ===============================================================
 # settings
 # ===============================================================
-START_POSE=0
-END_POSE=9
+START_POSE=${START_POSE:-0}
+END_POSE=${END_POSE:-9}
 
-# 指定要使用的物理 GPU ID，例如 8 卡机器上只用 2/3/6/7
+# 当前验证配置：单张 NVIDIA A100-SXM4 40GB，物理 GPU 0。
 # 可选数量：1 / 2 / 4 / 8
-GPU_IDS=(0 1 2 3)
+GPU_IDS=(0)
 
 # 自动根据 GPU_IDS 计算使用几张卡
 NUM_GPUS=${#GPU_IDS[@]}
 
-# 每张卡同时跑几个 single_localization_kde.py
-PROCS_PER_GPU=4
+# 保留原 Python 文件名，默认使用共享粗模板、批量起点和 Triton 投影。
+LOCALIZATION_BACKEND="${LOCALIZATION_BACKEND:-batch}"
+case "$LOCALIZATION_BACKEND" in
+    batch)
+        LOCALIZATION_SCRIPT="single_localization_kde.py"
+        PROCS_PER_GPU="${PROCS_PER_GPU:-1}"
+        ;;
+    *)
+        echo "[ERROR] This A100 package uses LOCALIZATION_BACKEND=batch: $LOCALIZATION_BACKEND" >&2
+        exit 1
+        ;;
+esac
+
+if [[ ! "$PROCS_PER_GPU" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[ERROR] PROCS_PER_GPU must be a positive integer: $PROCS_PER_GPU" >&2
+    exit 1
+fi
+
+# 留空时使用 batch Python 入口的默认批大小；这些选项只控制执行分批。
+LOCALIZATION_COARSE_BATCH_SIZE="${LOCALIZATION_COARSE_BATCH_SIZE:-}"
+LOCALIZATION_SENSOR_BATCH_SIZE="${LOCALIZATION_SENSOR_BATCH_SIZE:-}"
+if [ "$LOCALIZATION_BACKEND" = "batch" ]; then
+    for batch_size in "$LOCALIZATION_COARSE_BATCH_SIZE" "$LOCALIZATION_SENSOR_BATCH_SIZE"; do
+        if [[ -n "$batch_size" && ! "$batch_size" =~ ^[1-9][0-9]*$ ]]; then
+            echo "[ERROR] Localization batch sizes must be positive integers: $batch_size" >&2
+            exit 1
+        fi
+    done
+fi
 
 # 坐标统一到哪个 pose 坐标系
-TARGET_POSE=0
+TARGET_POSE=${TARGET_POSE:-0}
+
+for pose_value in "$START_POSE" "$END_POSE" "$TARGET_POSE"; do
+    if [[ ! "$pose_value" =~ ^(0|[1-9][0-9]*)$ ]]; then
+        echo "[ERROR] Pose IDs must be nonnegative integers without leading zeros" >&2
+        exit 1
+    fi
+done
+if [ "$TARGET_POSE" -gt "$START_POSE" ] || [ "$START_POSE" -gt "$END_POSE" ]; then
+    echo "[ERROR] Expected TARGET_POSE <= START_POSE <= END_POSE" >&2
+    exit 1
+fi
 
 GROUP_ID=3
 DATA_DIR="data"
@@ -47,6 +109,10 @@ else
 fi
 
 LOCALIZATION_NUM_PARTS=$((NUM_GPUS * PROCS_PER_GPU))
+if [ "$LOCALIZATION_NUM_PARTS" -gt 256 ]; then
+    echo "[ERROR] Localization parts exceed the initial 256 selected sensors" >&2
+    exit 1
+fi
 
 # 默认固定 run id，避免 checkpoint/log/output 路径随时间变化。
 # 如需保留多次运行结果，可在启动前手动指定 RUN_ID。
@@ -59,9 +125,6 @@ esac
 export RUN_ID
 LOG_ROOT="logs_group3_pose_range_${RUN_ID}"
 RECON_OUTPUT_DIR="recon_outputs_${RUN_ID}"
-
-mkdir -p "$LOG_ROOT"
-mkdir -p "$RECON_OUTPUT_DIR"
 
 SCRIPT_START_TS=$(date +%s)
 
@@ -165,7 +228,7 @@ extract_last_active_loss() {
     local log_file=$1
     local loss
 
-    loss=$(grep "Active_Loss:" "$log_file" | tail -n 1 | sed -E 's/.*Active_Loss: ([0-9.eE+-]+).*/\1/')
+    loss=$(grep "Active_Loss:" "$log_file" | tail -n 1 | sed -nE 's/.*Active_Loss:[[:space:]]*([^[:space:]|]+).*/\1/p')
 
     if [ -z "$loss" ]; then
         echo "nan"
@@ -182,10 +245,13 @@ loss_greater_than_threshold() {
 import math
 import sys
 
-loss = float(sys.argv[1])
-threshold = float(sys.argv[2])
+try:
+    loss = float(sys.argv[1])
+    threshold = float(sys.argv[2])
+except (ValueError, IndexError):
+    sys.exit(2)
 
-if math.isnan(loss):
+if not math.isfinite(loss) or not math.isfinite(threshold):
     sys.exit(2)
 
 sys.exit(0 if loss > threshold else 1)
@@ -260,6 +326,16 @@ run_localization() {
     local out_dir=$5
     local mode=$6
     local start_ts
+    local localization_args=()
+
+    if [ "$LOCALIZATION_BACKEND" = "batch" ]; then
+        if [ -n "$LOCALIZATION_COARSE_BATCH_SIZE" ]; then
+            localization_args+=(--coarse_batch_size "$LOCALIZATION_COARSE_BATCH_SIZE")
+        fi
+        if [ -n "$LOCALIZATION_SENSOR_BATCH_SIZE" ]; then
+            localization_args+=(--sensor_batch_size "$LOCALIZATION_SENSOR_BATCH_SIZE")
+        fi
+    fi
 
     start_ts=$(date +%s)
 
@@ -270,7 +346,7 @@ run_localization() {
     loc_ckpt_path=$(find_latest_ckpt "$loc_ckpt_root") || return 1
 
     echo "[INFO] Pose${pose_id} localization checkpoint: ${loc_ckpt_path}"
-    echo "[INFO] Starting pose${pose_id} localization mode=${mode} at $(date)"
+    echo "[INFO] Starting pose${pose_id} localization mode=${mode} backend=${LOCALIZATION_BACKEND} at $(date)"
     echo "[INFO] NUM_GPUS=${NUM_GPUS}, GPU_IDS=${GPU_IDS[*]}, PROCS_PER_GPU=${PROCS_PER_GPU}, PARTS=${LOCALIZATION_NUM_PARTS}"
 
     rm -f "${out_dir}/pred_pose${pose_id}_part"*.txt
@@ -296,7 +372,7 @@ run_localization() {
                 return 1
             fi
 
-            CUDA_VISIBLE_DEVICES="$gpu_id" python -u single_localization_kde.py \
+            CUDA_VISIBLE_DEVICES="$gpu_id" python -u "$LOCALIZATION_SCRIPT" \
                 --signal "$sim_signal_file" \
                 --sensor_gt "$SENSOR_LOCATION_FILE" \
                 --ckpt "$loc_ckpt_path" \
@@ -304,6 +380,7 @@ run_localization() {
                 --sensor_ids "$sensor_ids" \
                 --gpu 0 \
                 --use_kde \
+                "${localization_args[@]}" \
                 > "${log_dir}/localization_pose${pose_id}_part${part_id}_gpu${gpu_id}_${mode}.log" 2>&1 &
 
             local pid=$!
@@ -425,6 +502,22 @@ check_required_files() {
         exit 1
     fi
 
+    if [ ! -f "$LOCALIZATION_SCRIPT" ]; then
+        echo "[ERROR] Missing localization backend script: $LOCALIZATION_SCRIPT"
+        exit 1
+    fi
+
+    local required_file
+    for required_file in differentiable_radiation_embedding.py forward_propagation.py \
+        position_correction_and_refine.py sequential_correction.py joint_recon.py \
+        lib/forward.py lib/forward_batch.py lib/forward_triton.py lib/runtime_config.py \
+        lib/time_scatter.py lib/training_backward_tiled.py; do
+        if [ ! -f "$required_file" ]; then
+            echo "[ERROR] Missing pipeline file: $required_file" >&2
+            exit 1
+        fi
+    done
+
     if [ ! -f "$SENSOR_LOCATION_FILE" ]; then
         echo "[ERROR] Missing sensor location file: $SENSOR_LOCATION_FILE"
         exit 1
@@ -440,6 +533,12 @@ check_required_files() {
     done
 
     if [ "$START_POSE" -gt "$TARGET_POSE" ]; then
+        local previous_ckpt_root
+        previous_ckpt_root=$(checkpoint_dir_for_pose $((START_POSE - 1)))
+        if [ ! -d "$previous_ckpt_root" ] || ! find_latest_ckpt "$previous_ckpt_root" >/dev/null; then
+            echo "[ERROR] Resume requires a trained previous pose in $previous_ckpt_root" >&2
+            exit 1
+        fi
         for pose_id in $(seq "$TARGET_POSE" $((START_POSE - 1))); do
             local loc_file
             loc_file=$(location_file_for_recon_pose "$pose_id")
@@ -489,17 +588,17 @@ run_pose_after_forward_adaptive() {
         if [ "$cmp1024_status" -eq 0 ]; then
             echo "[ERROR] pose${pose_id} 1024-sensor refine still failed threshold: loss=${loss1024} > ${LOSS_THRESHOLD}"
             return 1
-        elif [ "$cmp1024_status" -eq 2 ]; then
-            echo "[ERROR] pose${pose_id} 1024-sensor refine loss is NaN or unparsable"
-            return 1
-        else
+        elif [ "$cmp1024_status" -eq 1 ]; then
             echo "[INFO] pose${pose_id} 1024-sensor refine passed: loss=${loss1024} <= ${LOSS_THRESHOLD}"
+        else
+            echo "[ERROR] pose${pose_id} 1024-sensor refine loss is non-finite, unparsable, or could not be checked"
+            return 1
         fi
-    elif [ "$cmp_status" -eq 2 ]; then
-        echo "[ERROR] pose${pose_id} 256-sensor refine loss is NaN or unparsable"
-        return 1
-    else
+    elif [ "$cmp_status" -eq 1 ]; then
         echo "[INFO] pose${pose_id} 256-sensor refine passed: loss=${loss256} <= ${LOSS_THRESHOLD}"
+    else
+        echo "[ERROR] pose${pose_id} 256-sensor refine loss is non-finite, unparsable, or could not be checked"
+        return 1
     fi
 
     run_sequential_correction_if_needed "$pose_id" "$log_dir" || return 1
@@ -612,7 +711,17 @@ echo "[INFO] END_POSE=${END_POSE}"
 echo "[INFO] TARGET_POSE=${TARGET_POSE}"
 echo "[INFO] NUM_GPUS=${NUM_GPUS}"
 echo "[INFO] GPU_IDS=${GPU_IDS[*]}"
+echo "[INFO] LOCALIZATION_BACKEND=${LOCALIZATION_BACKEND}"
+echo "[INFO] LOCALIZATION_SCRIPT=${LOCALIZATION_SCRIPT}"
+echo "[INFO] LOCALIZATION_PROJECTOR=${LOCALIZATION_PROJECTOR}"
+echo "[INFO] TRAIN_TIME_SCATTER=${TRAIN_TIME_SCATTER}"
+echo "[INFO] TRAIN_FORWARD_LAYOUT=${TRAIN_FORWARD_LAYOUT}"
+echo "[INFO] TRAIN_BACKWARD_BACKEND=${TRAIN_BACKWARD_BACKEND}"
 echo "[INFO] PROCS_PER_GPU=${PROCS_PER_GPU}"
+if [ "$LOCALIZATION_BACKEND" = "batch" ]; then
+    echo "[INFO] LOCALIZATION_COARSE_BATCH_SIZE=${LOCALIZATION_COARSE_BATCH_SIZE:-python-default}"
+    echo "[INFO] LOCALIZATION_SENSOR_BATCH_SIZE=${LOCALIZATION_SENSOR_BATCH_SIZE:-python-default}"
+fi
 echo "[INFO] LOCALIZATION_NUM_PARTS=${LOCALIZATION_NUM_PARTS}"
 echo "[INFO] LOSS_THRESHOLD=${LOSS_THRESHOLD}"
 echo "[INFO] RUN_ID=${RUN_ID}"
@@ -628,6 +737,31 @@ echo "[INFO] SENSOR_LOCATION_FILE=${SENSOR_LOCATION_FILE}"
 echo "============================================================"
 
 check_required_files
+
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    python - "${GPU_IDS[@]}" <<'PY'
+import sys
+import numpy
+import scipy
+import torch
+import triton
+from lib import forward_batch, forward_triton, time_scatter, training_backward_tiled
+
+if not torch.cuda.is_available():
+    raise SystemExit("[ERROR] CUDA is unavailable in the selected Python environment")
+for device_id in map(int, sys.argv[1:]):
+    if not 0 <= device_id < torch.cuda.device_count():
+        raise SystemExit(f"[ERROR] GPU {device_id} is not visible")
+    print(f"[CHECK] GPU {device_id}: {torch.cuda.get_device_name(device_id)}")
+print(f"[CHECK] Python {sys.version.split()[0]}, torch {torch.__version__}, "
+      f"CUDA {torch.version.cuda}, Triton {triton.__version__}, "
+      f"NumPy {numpy.__version__}, SciPy {scipy.__version__}")
+print("[CHECK] Pipeline files, input files, imports and GPU checks passed. No reconstruction started.")
+PY
+    exit "$?"
+fi
+
+mkdir -p "$LOG_ROOT" "$RECON_OUTPUT_DIR"
 
 if [ "$START_POSE" -eq "$TARGET_POSE" ]; then
     mkdir -p "${LOG_ROOT}/pose${TARGET_POSE}"

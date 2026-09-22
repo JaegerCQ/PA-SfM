@@ -9,6 +9,7 @@ from lib.runtime_config import (
     seed_everything,
     torch_generator,
 )
+from lib.time_scatter import scatter_time_gradient, time_scatter_indices_unique
 
 import numpy as np
 import torch
@@ -20,12 +21,27 @@ SEED = seed_everything(DEFAULT_SEED)
 STRICT_ATOMICS = os.environ.get("REPRO_STRICT_ATOMICS", "1").strip().lower() not in {"0", "false", "no", "off"}
 FIXED_POINT_SCALE = float(os.environ.get("REPRO_FIXED_POINT_SCALE", "10000000000.0"))
 FIXED_POINT_INV_SCALE = 1.0 / FIXED_POINT_SCALE
+TRAIN_TIME_SCATTER = os.environ.get("TRAIN_TIME_SCATTER", "vectorized").strip().lower()
+if TRAIN_TIME_SCATTER not in {"legacy", "vectorized"}:
+    raise ValueError("TRAIN_TIME_SCATTER must be legacy or vectorized")
+TRAIN_FORWARD_LAYOUT = os.environ.get("TRAIN_FORWARD_LAYOUT", "sensor_fast").strip().lower()
+if TRAIN_FORWARD_LAYOUT not in {"legacy", "sensor_fast"}:
+    raise ValueError("TRAIN_FORWARD_LAYOUT must be legacy or sensor_fast")
+if TRAIN_FORWARD_LAYOUT == "sensor_fast" and not STRICT_ATOMICS:
+    raise ValueError("TRAIN_FORWARD_LAYOUT=sensor_fast requires REPRO_STRICT_ATOMICS=1")
+TRAIN_BACKWARD_BACKEND = os.environ.get("TRAIN_BACKWARD_BACKEND", "sensor_tiled").strip().lower()
+if TRAIN_BACKWARD_BACKEND not in {"legacy", "sensor_tiled"}:
+    raise ValueError("TRAIN_BACKWARD_BACKEND must be legacy or sensor_tiled")
+if TRAIN_BACKWARD_BACKEND == "sensor_tiled":
+    if not STRICT_ATOMICS:
+        raise ValueError("TRAIN_BACKWARD_BACKEND=sensor_tiled requires REPRO_STRICT_ATOMICS=1")
+    from lib.training_backward_tiled import project_gradient_tiled
 
 # ===============================================================
 # 命令行参数
 # ===============================================================
 parser = argparse.ArgumentParser()
-parser.add_argument("--device-id", type=int, default=1, help="CUDA 卡号")
+parser.add_argument("--device-id", type=int, default=0, help="CUDA 卡号")
 parser.add_argument("--sensor-location", type=str, required=True, help="输入探头坐标文件")
 parser.add_argument("--signal", type=str, required=True, help="输入信号文件")
 parser.add_argument("--save-dir", type=str, required=True, help="checkpoint 保存根目录")
@@ -39,6 +55,8 @@ DEVICE_ID = args.device_id
 torch.cuda.set_device(DEVICE_ID)
 device = torch.device(f"cuda:{DEVICE_ID}")
 print(f"[INIT] 当前运行设备: {device}")
+print(f"[CONFIG] TRAIN_FORWARD_LAYOUT={TRAIN_FORWARD_LAYOUT}")
+print(f"[CONFIG] TRAIN_BACKWARD_BACKEND={TRAIN_BACKWARD_BACKEND}")
 
 # ===============================================================
 # 声学参数 / 分辨率
@@ -140,6 +158,13 @@ pos_time = (u_time - KDE_R_MIN) / KDE_DELTA
 
 time_i0 = torch.floor(pos_time).long().clamp(0, KDE_N_BINS - 2).contiguous()
 time_beta = (pos_time - time_i0.to(torch.float32)).contiguous()
+TIME_SCATTER_UNIQUE = (
+    time_scatter_indices_unique(time_i0) if TRAIN_TIME_SCATTER == "vectorized" else None
+)
+if TRAIN_TIME_SCATTER == "vectorized" and not TIME_SCATTER_UNIQUE:
+    print("[CONFIG] TRAIN_TIME_SCATTER=vectorized, effective=legacy (interpolation destinations overlap)")
+else:
+    print(f"[CONFIG] TRAIN_TIME_SCATTER={TRAIN_TIME_SCATTER}, effective={TRAIN_TIME_SCATTER}")
 
 # ===============================================================
 # Triton 前向核：source -> distance KDE histogram
@@ -220,9 +245,16 @@ def kde_project_kernel_fixed(
     fixed_scale,
     BLOCK_K: tl.constexpr,
     GRID_SIZE: tl.constexpr,
+    SENSOR_FAST: tl.constexpr = False,
+    N_SENSORS: tl.constexpr = 1,
 ):
-    pid_k = tl.program_id(0)
-    pid_s = tl.program_id(1)
+    if SENSOR_FAST:
+        pid = tl.program_id(0)
+        pid_k = pid // N_SENSORS
+        pid_s = pid % N_SENSORS
+    else:
+        pid_k = tl.program_id(0)
+        pid_s = tl.program_id(1)
 
     k_offsets = pid_k * BLOCK_K + tl.arange(0, BLOCK_K)
     mask_k = k_offsets < n_sources
@@ -407,7 +439,11 @@ class GaussianSimFunction(torch.autograd.Function):
     ):
         BLOCK_K = 128
 
-        grid = (triton.cdiv(Pc.numel(), BLOCK_K), sens_x.numel())
+        n_source_blocks = triton.cdiv(Pc.numel(), BLOCK_K)
+        sensor_fast = TRAIN_FORWARD_LAYOUT == "sensor_fast"
+        # Flatten the launch: swapping the original axes would exceed grid.y's
+        # limit with 500000 source blocks. Only the strict forward path changes.
+        grid = (n_source_blocks * sens_x.numel(),) if sensor_fast else (n_source_blocks, sens_x.numel())
 
         if STRICT_ATOMICS:
             hist_q = torch.zeros(
@@ -430,6 +466,8 @@ class GaussianSimFunction(torch.autograd.Function):
                 FIXED_POINT_SCALE,
                 BLOCK_K=BLOCK_K,
                 GRID_SIZE=GRID_SIZE,
+                SENSOR_FAST=sensor_fast,
+                N_SENSORS=sens_x.numel(),
                 num_warps=4,
                 num_stages=4,
             )
@@ -481,19 +519,10 @@ class GaussianSimFunction(torch.autograd.Function):
     def backward(ctx, grad_out):
         sens_x, sens_y, sens_z, saved_time_i0, saved_time_beta = ctx.saved_tensors
 
-        grad_out_c = grad_out.contiguous()
-
-        grad_p_grid = torch.zeros(
-            (ctx.n_sensors, ctx.n_bins),
-            device=grad_out.device,
-            dtype=torch.float32,
+        grad_p_grid = scatter_time_gradient(
+            grad_out, saved_time_i0, saved_time_beta, ctx.n_bins,
+            mode=TRAIN_TIME_SCATTER, indices_unique=TIME_SCATTER_UNIQUE,
         )
-
-        for t in range(grad_out_c.shape[1]):
-            idx0_t = saved_time_i0[t]
-            beta_t = saved_time_beta[t]
-            grad_p_grid[:, idx0_t] = grad_p_grid[:, idx0_t] + grad_out_c[:, t] * (1.0 - beta_t)
-            grad_p_grid[:, idx0_t + 1] = grad_p_grid[:, idx0_t + 1] + grad_out_c[:, t] * beta_t
 
         grad_hist = F.conv_transpose1d(
             grad_p_grid[:, None, :],
@@ -504,7 +533,16 @@ class GaussianSimFunction(torch.autograd.Function):
         BLOCK_K = 128
         grid = (triton.cdiv(ctx.n_sources, BLOCK_K), ctx.n_sensors)
 
-        if STRICT_ATOMICS:
+        if STRICT_ATOMICS and TRAIN_BACKWARD_BACKEND == "sensor_tiled":
+            grad_pc_q = project_gradient_tiled(
+                sens_x, sens_y, sens_z, grad_hist,
+                ctx.n_sources, ctx.n_bins, KDE_R_MIN, KDE_DELTA,
+                voxel_size, center, fixed_scale=FIXED_POINT_SCALE,
+                grid_size=GRID_SIZE,
+            )
+            grad_pc = grad_pc_q.to(torch.float32) * FIXED_POINT_INV_SCALE
+            del grad_pc_q
+        elif STRICT_ATOMICS:
             grad_pc_q = torch.zeros(
                 ctx.n_sources,
                 device=grad_out.device,
@@ -656,8 +694,10 @@ if __name__ == "__main__":
         loss.backward()
         optimizer.step()
 
-        epoch_time = time.time() - t_start
         grad_mean = Pc_param.grad.mean().item() if Pc_param.grad is not None else 0.0
+        # The scalar read synchronizes preceding CUDA work. Time after it so
+        # asynchronous launches are not reported as near-zero training time.
+        epoch_time = time.time() - t_start
 
         print(
             f"[Epoch {epoch + 1}/{max_epochs}] "

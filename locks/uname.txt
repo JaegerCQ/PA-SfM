@@ -1,1 +1,1 @@
-Linux test-NF5468-A7-A0-R0-00 6.8.0-87-generic #88~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Tue Oct 14 14:03:14 UTC 2 x86_64 x86_64 x86_64 GNU/Linux
+Linux job-1f939b7a-04c4-4d07-a27d-3a55e5308918-master-0 5.15.0-1053-nvidia #54-Ubuntu SMP Sat Apr 20 01:13:45 UTC 2024 x86_64 x86_64 x86_64 GNU/Linux

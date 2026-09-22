@@ -1,34 +1,88 @@
 
-     active environment : PA_SfM
-    active env location : /home/gj/.conda/envs/PA_SfM
+# conda environments:
+#
+                       /home/shuangli1013/.local/miniforge3/envs/earth
+                       /home/shuangli1013/.local/miniforge3/envs/fwi_3dgs
+                       /home/shuangli1013/.local/miniforge3/envs/mpi_3dgs
+base                   /root/miniconda3
+cryoet               * /root/miniconda3/envs/cryoet
+lsc                    /root/miniconda3/envs/lsc
+meg                    /root/miniconda3/envs/meg
+neuro_ai               /root/miniconda3/envs/neuro_ai
+
+
+     active environment : cryoet
+    active env location : /root/miniconda3/envs/cryoet
             shell level : 2
-       user config file : /home/gj/.condarc
- populated config files : /home/gj/.condarc
-          conda version : 24.5.0
-    conda-build version : 24.5.1
-         python version : 3.12.4.final.0
+       user config file : /root/.condarc
+ populated config files : /root/miniconda3/.condarc
+                          /root/.condarc
+          conda version : 25.3.1
+    conda-build version : not installed
+         python version : 3.13.2.final.0
                  solver : libmamba (default)
-       virtual packages : __archspec=1=zen4
-                          __conda=24.5.0=0
-                          __cuda=12.6=0
+       virtual packages : __archspec=1=zen2
+                          __conda=25.3.1=0
+                          __cuda=12.2=0
                           __glibc=2.35=0
-                          __linux=6.8.0=0
+                          __linux=5.15.0=0
                           __unix=0=0
-       base environment : /opt/anaconda3  (read only)
-      conda av data dir : /opt/anaconda3/etc/conda
+       base environment : /root/miniconda3  (writable)
+      conda av data dir : /root/miniconda3/etc/conda
   conda av metadata url : None
-           channel URLs : https://repo.anaconda.com/pkgs/main/linux-64
+           channel URLs : http://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free/linux-64
+                          http://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free/noarch
+                          http://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/linux-64
+                          http://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/noarch
+                          http://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/linux-64
+                          http://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/noarch
+                          https://repo.anaconda.com/pkgs/main/linux-64
                           https://repo.anaconda.com/pkgs/main/noarch
                           https://repo.anaconda.com/pkgs/r/linux-64
                           https://repo.anaconda.com/pkgs/r/noarch
-          package cache : /opt/anaconda3/pkgs
-                          /home/gj/.conda/pkgs
-       envs directories : /home/gj/.conda/envs
-                          /opt/anaconda3/envs
+          package cache : /root/miniconda3/pkgs
+                          /root/.conda/pkgs
+       envs directories : /root/miniconda3/envs
+                          /root/.conda/envs
                platform : linux-64
-             user-agent : conda/24.5.0 requests/2.32.2 CPython/3.12.4 Linux/6.8.0-87-generic ubuntu/22.04.5 glibc/2.35 solver/libmamba conda-libmamba-solver/24.1.0 libmambapy/1.5.8 aau/0.4.4 c/. s/. e/.
-                UID:GID : 1007:1007
+             user-agent : conda/25.3.1 requests/2.32.3 CPython/3.13.2 Linux/5.15.0-1053-nvidia ubuntu/22.04.3 glibc/2.35 solver/libmamba conda-libmamba-solver/25.4.0 libmambapy/2.0.5 aau/0.7.0 c/. s/. e/.
+                UID:GID : 0:0
              netrc file : None
            offline mode : False
 
+sys.version: 3.13.2 | packaged by Anaconda, Inc. | (m...
+sys.prefix: /root/miniconda3
+sys.executable: /root/miniconda3/bin/python
+conda location: /root/miniconda3/lib/python3.13/site-packages/conda
+conda-build: None
+conda-content-trust: /root/miniconda3/bin/conda-content-trust
+conda-env: /root/miniconda3/bin/conda-env
+user site dirs:
 
+ALL_PROXY: <set>
+CIO_TEST: <not set>
+CONDA_DEFAULT_ENV: cryoet
+CONDA_EXE: /root/miniconda3/bin/conda
+CONDA_PREFIX: /root/miniconda3/envs/cryoet
+CONDA_PREFIX_1: /root/miniconda3
+CONDA_PROMPT_MODIFIER: (cryoet) 
+CONDA_PYTHON_EXE: /root/miniconda3/bin/python
+CONDA_ROOT: /root/miniconda3
+CONDA_SHLVL: 2
+CURL_CA_BUNDLE: <not set>
+HTTPS_PROXY: <set>
+HTTP_PROXY: <set>
+LD_LIBRARY_PATH: /usr/local/lib/python3.10/dist-packages/torch/lib:/usr/local/lib/python3.10/dist-packages/torch_tensorrt/lib:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
+LD_PRELOAD: <not set>
+LIBRARY_PATH: /usr/local/cuda/lib64/stubs:
+NO_PROXY: <set>
+PATH: /root/miniconda3/envs/cryoet/bin:/root/miniconda3/envs/cryoet/bin:/home/shuangli1013/.local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/shuangli1013/.codex/tmp/arg0/codex-arg0onHjcj:/home/shuangli1013/.local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex-path:/home/shuangli1013/.local/node-current/bin:/home/shuangli1013/.local/bin:/client-tools:/client-tools:/usr/local/lib/python3.10/dist-packages/torch_tensorrt/bin:/usr/local/mpi/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/ucx/bin:/opt/tensorrt/bin
+PYTHONIOENCODING: utf-8
+PYTHONUNBUFFERED: 1
+REQUESTS_CA_BUNDLE: <not set>
+SSL_CERT_FILE: <not set>
+_CUDA_COMPAT_PATH: /usr/local/cuda/compat
+all_proxy: <set>
+http_proxy: <set>
+https_proxy: <set>
+no_proxy: <set>

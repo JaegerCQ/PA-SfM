@@ -1,23 +1,13 @@
-"""Step 3 — single-sensor coarse-to-fine localization.
+"""Batch the original KDE localization without reducing search or iteration counts.
 
-For each sensor, optimize its 3D position by matching its simulated signal
-(against the trained pose0 phantom Pc) to its observed pose10-aligned signal.
-
-  - Coarse: dense grid search → keep top-K candidates by negative-correlation
-  - Fine: from each candidate, Adam gradient descent with annealed sigma
-  - Pick the candidate with lowest final loss
-
-Inputs:
-  data/simulated_signals_full_4096_pose10.txt  — from step 2b
-  data/sensor_location_pose10.txt              — ground-truth pose10 sensors (for error report)
-  checkpoints/pose0/model.pt                   — phantom volume from step 1
-
-Output:
-  outputs/predicted_locations_pose10_10MHz.txt — (n_sensors, 3) predicted positions (m)
-
-Source: legacy/in_vivo_liver_array_predict_sh_downsample_pose10.ipynb
+Coarse candidate signals depend only on the source field, so compute them once
+per process. Fine optimization batches independent sensor/start pairs; summing
+their losses preserves each parameter row's original Adam gradient scale.
 """
 import argparse
+from functools import partial
+import json
+import os
 import time
 from pathlib import Path
 
@@ -26,142 +16,171 @@ from lib.runtime_config import DEFAULT_SEED, seed_everything
 import numpy as np
 import torch
 
-from lib.forward import (
-    VS_DEFAULT, kde_acoustic_sim, load_phantom_topk, sparse_acoustic_sim,
-)
+from lib.forward import VS_DEFAULT
+from lib.forward_batch import kde_acoustic_sim_batch, load_phantom_topk_fast
 
 ROOT = Path(__file__).resolve().parent
 SEED = seed_everything(DEFAULT_SEED)
+FORWARD_BATCH = kde_acoustic_sim_batch
 
 
-def neg_corr_loss(pred, target):
-    p = pred - pred.mean()
-    t = target - target.mean()
-    return 1.0 - torch.sum(p * t) / (torch.norm(p) * torch.norm(t) + 1e-9)
+def neg_corr_loss_batch(pred, target):
+    p = pred - pred.mean(dim=-1, keepdim=True)
+    t = target - target.mean(dim=-1, keepdim=True)
+    return 1.0 - (p * t).sum(dim=-1) / (
+        torch.linalg.vector_norm(p, dim=-1) * torch.linalg.vector_norm(t, dim=-1) + 1e-9)
 
 
-def coarse_search(xyz_src, Pc, target_sig, bounds, step, k, t_start, n_time, delta_t,
-                  device, forward_fn):
-    xs = torch.arange(bounds[0][0], bounds[0][1], step)
-    ys = torch.arange(bounds[1][0], bounds[1][1], step)
-    zs = torch.arange(bounds[2][0], bounds[2][1], step)
-    gx, gy, gz = torch.meshgrid(xs, ys, zs, indexing="ij")
-    candidates = torch.stack([gx.flatten(), gy.flatten(), gz.flatten()], dim=1).to(device)
-
-    losses = []
-    with torch.no_grad():
-        for pos in candidates:
-            pred = forward_fn(pos, xyz_src, Pc, t_start, n_time, delta_t,
-                              vs=VS_DEFAULT, sigma=0.5e-3)
-            losses.append(neg_corr_loss(pred, target_sig).item())
-    top = torch.topk(torch.tensor(losses), k, largest=False).indices
-    return candidates[top].cpu().numpy()
+@torch.no_grad()
+def prepare_coarse(xyz_src, Pc, t_start, n_time, delta_t, batch_size=32):
+    # Generate on CPU exactly as the legacy implementation does.
+    axis = torch.arange(-0.16, 0.16, 0.02)
+    mesh = torch.meshgrid(axis, axis, axis, indexing="ij")
+    candidates = torch.stack([v.flatten() for v in mesh], dim=1).to(Pc.device)
+    templates = []
+    for start in range(0, len(candidates), batch_size):
+        templates.append(FORWARD_BATCH(
+            candidates[start:start + batch_size], xyz_src, Pc,
+            t_start, n_time, delta_t, vs=VS_DEFAULT, sigma=0.5e-3))
+    return candidates, torch.cat(templates)
 
 
-def fine_search(xyz_src, Pc, target_sig, start_pos, total_epochs, lr,
-                sigma_start, sigma_target, t_start, n_time, delta_t,
-                device, forward_fn):
-    param = torch.nn.Parameter(torch.tensor(start_pos, device=device, dtype=torch.float32),
-                               requires_grad=True)
-    opt = torch.optim.Adam([param], lr=lr)
-    final_loss = None
+@torch.no_grad()
+def select_starts(candidates, templates, targets, k):
+    # Use elementwise reductions rather than TF32 GEMM to preserve correlation
+    # ordering close to the legacy scalar calculation.
+    indices = torch.stack([
+        neg_corr_loss_batch(templates, target).cpu().topk(k, largest=False).indices
+        for target in targets
+    ]).to(candidates.device)
+    return candidates[indices]
+
+
+def fine_search_batch(xyz_src, Pc, target_sig, start_pos, total_epochs, lr,
+                      sigma_start, sigma_target, t_start, n_time, delta_t):
+    """Independent Adam runs, with rows ordered (sensor, coarse-start)."""
+    param = torch.nn.Parameter(start_pos.detach().clone())
+    opt = torch.optim.Adam([param], lr=lr, foreach=False)
     for epoch in range(total_epochs):
-        opt.zero_grad()
+        opt.zero_grad(set_to_none=True)
         sigma = sigma_start * (sigma_target / sigma_start) ** min(1.0, epoch / (total_epochs * 0.8))
-        pred = forward_fn(param, xyz_src, Pc, t_start, n_time, delta_t,
-                          vs=VS_DEFAULT, sigma=sigma)
-        loss = neg_corr_loss(pred, target_sig)
-        loss.backward()
+        pred = FORWARD_BATCH(param, xyz_src, Pc, t_start, n_time, delta_t,
+                                     vs=VS_DEFAULT, sigma=sigma)
+        losses = neg_corr_loss_batch(pred, target_sig)
+        losses.sum().backward()
         opt.step()
-        final_loss = loss.item()
-    return param.detach().cpu().numpy(), final_loss
+    # Match legacy selection: loss from just before the last Adam update, and
+    # the position immediately after that update.
+    return param.detach(), losses.detach()
 
 
-def solve_sensor(xyz_src, Pc, true_pos, full_sig, args, device, forward_fn):
-    target_sig = full_sig[args.t_start:args.t_end]
-    starts = coarse_search(xyz_src, Pc, target_sig,
-                           bounds=[[-0.16, 0.16]] * 3, step=0.02, k=args.top_k,
-                           t_start=args.t_start, n_time=args.t_end - args.t_start,
-                           delta_t=args.delta_t, device=device, forward_fn=forward_fn)
-    best_pos, best_loss = None, float("inf")
-    for start in starts:
-        pos, loss = fine_search(xyz_src, Pc, target_sig, start,
-                                args.total_epochs, args.lr,
-                                args.sigma_start, args.sigma_target,
-                                args.t_start, args.t_end - args.t_start,
-                                args.delta_t, device, forward_fn)
-        if loss < best_loss:
-            best_pos, best_loss = pos, loss
-    err_mm = np.linalg.norm(best_pos - true_pos) * 1000
-    return best_pos, 1.0 - best_loss, err_mm
-
-
-def main():
+def parse_args():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--signal", default=str(ROOT / "data/simulated_signals_full_4096_pose10.txt"))
-    ap.add_argument("--sensor_gt", default=str(ROOT / "data/sensor_location_pose10.txt"),
-                    help="ground-truth positions, used only for the per-sensor error printout")
-    ap.add_argument("--ckpt", default=str(ROOT / "checkpoints/pose0/model.pt"))
-    ap.add_argument("--out", default=str(ROOT / "outputs/predicted_locations_pose10_10MHz.txt"))
-    ap.add_argument("--keep_ratio", type=float, default=0.002,
-                    help="fraction of source-grid voxels kept by |Pc| top-K")
-    ap.add_argument("--top_k", type=int, default=15, help="coarse candidates per sensor")
+    ap.add_argument("--signal", required=True)
+    ap.add_argument("--sensor_gt", required=True,
+                    help="reference array for logging only; not pose1 ground truth")
+    ap.add_argument("--ckpt", required=True)
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--keep_ratio", type=float, default=0.002)
+    ap.add_argument("--top_k", type=int, default=15)
     ap.add_argument("--total_epochs", type=int, default=600)
     ap.add_argument("--lr", type=float, default=0.0005)
     ap.add_argument("--sigma_start", type=float, default=1.5e-3)
     ap.add_argument("--sigma_target", type=float, default=0.1e-3)
-    ap.add_argument("--delta_t", type=float, default=100e-9, help="10MHz default")
+    ap.add_argument("--delta_t", type=float, default=100e-9)
     ap.add_argument("--t_start", type=int, default=500)
     ap.add_argument("--t_end", type=int, default=1000)
-    ap.add_argument("--downsample", type=int, default=4, help="time decimation (1=already-10MHz)")
-    ap.add_argument("--sensor_limit", type=int, default=0, help="stop after N sensors (0=all)")
-    ap.add_argument("--sensor_ids", default="",
-                    help="comma-separated indices; overrides --sensor_limit when set")
-    ap.add_argument("--use_kde", action="store_true",
-                    help="use kde_acoustic_sim forward in coarse and fine search")
-    ap.add_argument("--gpu", type=int, default=1)
+    ap.add_argument("--downsample", type=int, default=4)
+    ap.add_argument("--sensor_limit", type=int, default=0)
+    ap.add_argument("--sensor_ids", default="")
+    ap.add_argument("--use_kde", action="store_true", help="compatibility flag; this backend always uses KDE")
+    ap.add_argument("--gpu", type=int, default=0)
+    ap.add_argument("--coarse_batch_size", type=int, default=32)
+    ap.add_argument("--sensor_batch_size", type=int, default=4)
+    ap.add_argument("--projector", choices=("torch", "triton"),
+                    default=os.environ.get("LOCALIZATION_PROJECTOR", "triton"))
     args = ap.parse_args()
+    if min(args.coarse_batch_size, args.sensor_batch_size, args.total_epochs, args.top_k) < 1:
+        ap.error("batch sizes, total_epochs and top_k must be positive")
+    if not 0 < args.keep_ratio <= 1 or args.t_end <= args.t_start:
+        ap.error("invalid keep_ratio or time range")
+    return args
 
+
+def main():
+    global FORWARD_BATCH
+    args = parse_args()
+    started = time.perf_counter()
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
-    forward_fn = kde_acoustic_sim if args.use_kde else sparse_acoustic_sim
-    print(f"[INIT] device={device} forward={forward_fn.__name__}")
-
-    print(f"[LOAD] phantom: {args.ckpt}")
-    xyz_src, Pc = load_phantom_topk(args.ckpt, device, keep_ratio=args.keep_ratio)
-    print(f"[INFO] kept {xyz_src.shape[0]} source points")
-
+    FORWARD_BATCH = partial(kde_acoustic_sim_batch, projector=args.projector)
+    print(f"[INIT] device={device} backend=batch projector={args.projector} sensor_batch={args.sensor_batch_size} "
+          f"coarse_batch={args.coarse_batch_size}", flush=True)
+    xyz_src, Pc = load_phantom_topk_fast(args.ckpt, device, keep_ratio=args.keep_ratio)
     signals = np.loadtxt(args.signal)
     if args.downsample > 1:
         signals = signals[:, ::args.downsample]
     sensor_gt = np.loadtxt(args.sensor_gt)
-    total = signals.shape[0]
+    total = len(signals)
+    if sensor_gt.shape != (total, 3):
+        raise ValueError("Reference array must contain one 3D position per sensor")
     if args.sensor_ids.strip():
         sensor_ids = [int(x) for x in args.sensor_ids.split(",")]
     elif args.sensor_limit > 0:
         sensor_ids = list(range(min(args.sensor_limit, total)))
     else:
         sensor_ids = list(range(total))
-    print(f"[INFO] {len(sensor_ids)} sensors selected (of {total} total), "
-          f"{signals.shape[1]} time samples")
-
-    signals_t = torch.tensor(signals, dtype=torch.float32, device=device)
+    if not sensor_ids or min(sensor_ids) < 0 or max(sensor_ids) >= total:
+        raise ValueError("sensor_ids must be nonempty and within the signal array")
+    targets = torch.as_tensor(signals[sensor_ids, args.t_start:args.t_end],
+                              dtype=Pc.dtype, device=device)
+    n_time = args.t_end - args.t_start
+    print(f"[INFO] kept {len(Pc)} source points; {len(sensor_ids)} sensors selected", flush=True)
+    stage = time.perf_counter()
+    candidates, templates = prepare_coarse(xyz_src, Pc, args.t_start, n_time,
+                                           args.delta_t, args.coarse_batch_size)
+    starts = select_starts(candidates, templates, targets, args.top_k)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    coarse_seconds = time.perf_counter() - stage
+    print(f"[COARSE] {len(candidates)} shared candidates; {coarse_seconds:.3f}s", flush=True)
     preds = np.full((total, 3), np.nan, dtype=np.float64)
-    t0 = time.time()
-    for step, i in enumerate(sensor_ids):
-        pos, corr, err_mm = solve_sensor(xyz_src, Pc, sensor_gt[i], signals_t[i],
-                                         args, device, forward_fn)
-        preds[i] = pos
-        elapsed = time.time() - t0
-        eta = elapsed / (step + 1) * (len(sensor_ids) - step - 1)
-        print(f"[{step+1}/{len(sensor_ids)}] sensor#{i} "
-              f"pred=[{pos[0]*1000:+.2f},{pos[1]*1000:+.2f},{pos[2]*1000:+.2f}]mm "
-              f"corr={corr:.4f} err={err_mm:.2f}mm  ({elapsed:.0f}s elapsed, eta {eta:.0f}s)")
-
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savetxt(out_path, preds, fmt="%.6f",
-               header="Predicted x, y, z (meters); NaN = sensor not solved")
-    print(f"[DONE] saved {out_path}")
+    correlations = np.full(total, np.nan)
+    stage = time.perf_counter()
+    for offset in range(0, len(sensor_ids), args.sensor_batch_size):
+        subset = sensor_ids[offset:offset + args.sensor_batch_size]
+        initial = starts[offset:offset + len(subset)].reshape(-1, 3)
+        target_batch = targets[offset:offset + len(subset)].repeat_interleave(args.top_k, dim=0)
+        positions, losses = fine_search_batch(
+            xyz_src, Pc, target_batch, initial, args.total_epochs, args.lr,
+            args.sigma_start, args.sigma_target, args.t_start, n_time, args.delta_t)
+        positions = positions.reshape(len(subset), args.top_k, 3)
+        losses = losses.reshape(len(subset), args.top_k)
+        # As in the legacy `loss < best_loss` loop, ignore failed starts when
+        # other starts for that sensor remain usable.
+        losses = torch.where(torch.isfinite(losses), losses, torch.inf)
+        best = losses.argmin(dim=1)
+        row = torch.arange(len(subset), device=device)
+        best_pos = positions[row, best].cpu().numpy()
+        best_corr = (1.0 - losses[row, best]).cpu().numpy()
+        if not np.isfinite(best_pos).all() or not np.isfinite(best_corr).all():
+            raise RuntimeError("Non-finite localization result")
+        preds[subset] = best_pos
+        correlations[subset] = best_corr
+        elapsed = time.perf_counter() - stage
+        completed = offset + len(subset)
+        eta = elapsed / completed * (len(sensor_ids) - completed)
+        print(f"[{completed}/{len(sensor_ids)}] sensors={subset} "
+              f"mean_corr={best_corr.mean():.6f} ({elapsed:.1f}s elapsed, eta {eta:.1f}s)", flush=True)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    np.savetxt(out, preds, fmt="%.6f", header="Predicted x, y, z (meters); NaN = sensor not solved")
+    report = {"backend": "batch", "arguments": vars(args), "coarse_seconds": coarse_seconds,
+              "fine_seconds": time.perf_counter() - stage,
+              "total_seconds": time.perf_counter() - started,
+              "sensor_ids": sensor_ids, "correlations": correlations[sensor_ids].tolist(),
+              "note": "Correlations match the legacy pre-final-update logging convention; reference positions are not ground truth."}
+    out.with_suffix(".timing.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(f"[DONE] saved {out}", flush=True)
 
 
 if __name__ == "__main__":

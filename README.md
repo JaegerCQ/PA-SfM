@@ -4,38 +4,29 @@
 
 We introduce PA-SfM, a tracker-free differentiable acoustic structure-from-motion (SfM) framework that recovers relative imaging poses directly from PA measurements. By integrating a differentiable acoustic radiation model with hierarchical optimization and rigid array constraints, PA-SfM jointly estimates inter-view transformations and reconstructs 3D PA volumes without external pose measurements. We demonstrate genuine freehand 3D PAI of human hand vasculature, in which arbitrary hand motion over approximately 1 s provides multi-view measurements from which PA-SfM recovers the relative poses and jointly reconstructs a large FOV vascular network without motion tracking or predefined trajectories.  
 
-![image](https://github.com/JaegerCQ/PA-SfM/blob/LS-GJ/pictures/sequential_display.png)           
+![image](pictures/sequential_display.png)           
 _Repeatability validation of PA-SfM freehand 3D reconstruction of hand vessels._        
 
-![image](https://github.com/JaegerCQ/PA-SfM/blob/LS-GJ/pictures/freehand.png)        
+![image](pictures/freehand.png)        
 _PA-SfM freehand 3D reconstructions of hand vessels._
 
-![image](https://github.com/JaegerCQ/PA-SfM/blob/LS-GJ/pictures/pipeline_final.png)        
+![image](pictures/pipeline_final.png)        
 _The overview of PA-SfM pipeline._    
 
 ## Create Conda Environment   
 
-To ensure reproducible results, it is strongly recommended to use the following pinned installation configuration and run the experiments on NVIDIA RTX 4090D with CUDA 12.6.   
+This edition was tested on a single NVIDIA A100-SXM4-40GB with Python 3.10.20, PyTorch 2.5.1+cu121, Triton 3.1.0, NumPy 1.26.4, and SciPy 1.15.3. Create the pinned environment with the following commands; pip downloads the locked packages from their online sources.
+
 ```bash
 conda create -n PA_SfM --file locks/conda-explicit.txt
 conda activate PA_SfM
 
 python -m pip install \
-  --no-index \
-  --find-links locks/wheelhouse \
   --require-hashes \
   -r locks/requirements.pip-hash-lock.txt
 ```
 
-If exact one-to-one reproducibility is not required, you can also create the environment using the following method.
-
-```bash
-conda create -n PA_SfM python=3.11 -y
-conda activate PA_SfM
-conda install -c conda-forge numpy scipy matplotlib jupyterlab ipykernel -y
-pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 \
-  --index-url https://download.pytorch.org/whl/cu126
-```
+On the current machine, the tested environment already exists as `cryoet`. Run `conda activate cryoet` and proceed directly to the pipeline; use this activation command in place of `conda activate PA_SfM` below.
 
 ## Data Layout   
 
@@ -52,16 +43,25 @@ data/
 
 ## Settings
 
-Adjust this according to the number of GPUs you have. The shellscript supports single-GPU, dual-GPU, 4-GPU, and 8-GPU configurations.
-In `run_group3_pose_range.sh`, modify:
+The default configuration in `run_group3_pose_range.sh` uses one A100 and processes poses 000 through 009:
 
 ```shellscript
-GPU_IDS=(0 1 2 3)
+GPU_IDS=(0)
+START_POSE=0
+END_POSE=9
 ```
 
-The default setup is intended to run on four RTX 4090D GPUs. Each pose reconstruction takes about 26 minutes, and the full PA-SfM run for all 10 poses completes in under 4 hours.
+The script enables batched Triton localization, vectorized time-gradient scattering, sensor-fast forward projection, and sensor-tiled backward projection by default. No additional environment exports are needed.
+
+The complete two-pose pipeline (pose000 + pose001) was measured at **13 minutes 7 seconds** on one A100-SXM4-40GB, including approximately **280 seconds for each pose's volume training**. And for one new pose, the runtime is about only **450 seconds**. The runtime for all 10 poses is approximately **1 hour 13 minutes**.
+
+To run only the measured two-pose case, set `END_POSE=1` in the script or launch it with `END_POSE=1 bash ./run_group3_pose_range.sh`.
+
+Setting `START_POSE` above zero resumes an existing run and requires the preceding pose's checkpoint and recovered coordinates in this directory.
 
 ## Run Pipeline  
+
+Run these commands from the `PA-SfM` directory.
 
 ```bash
 conda activate PA_SfM
@@ -73,6 +73,12 @@ Monitor progress:
 
 ```bash
 tail -f main_group3_pose_range.log
+```
+
+For an optional input, dependency, and GPU check without starting reconstruction, activate the environment and run:
+
+```bash
+bash ./run_group3_pose_range.sh --check
 ```
 
 ## Citation 

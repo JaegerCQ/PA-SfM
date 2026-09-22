@@ -1,114 +1,88 @@
+/root/miniconda3/envs/cryoet/lib/python3.10/runpy.py:126: RuntimeWarning: 'torch.utils.collect_env' found in sys.modules after import of package 'torch.utils', but prior to execution of 'torch.utils.collect_env'; this may result in unpredictable behaviour
+  warn(RuntimeWarning(msg))
 Collecting environment information...
-PyTorch version: 2.7.0+cu126
+PyTorch version: 2.5.1+cu121
 Is debug build: False
-CUDA used to build PyTorch: 12.6
+CUDA used to build PyTorch: 12.1
 ROCM used to build PyTorch: N/A
 
-OS: Ubuntu 22.04.5 LTS (x86_64)
-GCC version: (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+OS: Ubuntu 22.04.3 LTS (x86_64)
+GCC version: (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
 Clang version: Could not collect
-CMake version: version 3.22.1
+CMake version: Could not collect
 Libc version: glibc-2.35
 
-Python version: 3.11.15 | packaged by conda-forge | (main, Jun 11 2026, 03:34:02) [GCC 14.3.0] (64-bit runtime)
-Python platform: Linux-6.8.0-87-generic-x86_64-with-glibc2.35
+Python version: 3.10.20 (main, Mar 11 2026, 17:46:40) [GCC 14.3.0] (64-bit runtime)
+Python platform: Linux-5.15.0-1053-nvidia-x86_64-with-glibc2.35
 Is CUDA available: True
-CUDA runtime version: 12.5.82
+CUDA runtime version: 12.2.128
 CUDA_MODULE_LOADING set to: LAZY
-GPU models and configuration: 
-GPU 0: NVIDIA GeForce RTX 4090 D
-GPU 1: NVIDIA GeForce RTX 4090 D
-GPU 2: NVIDIA GeForce RTX 4090 D
-GPU 3: NVIDIA GeForce RTX 4090 D
-GPU 4: NVIDIA GeForce RTX 4090 D
-GPU 5: NVIDIA GeForce RTX 4090 D
-GPU 6: NVIDIA GeForce RTX 4090 D
-GPU 7: NVIDIA GeForce RTX 4090 D
-
-Nvidia driver version: 560.35.03
-cuDNN version: Could not collect
+GPU models and configuration: GPU 0: NVIDIA A100-SXM4-40GB
+Nvidia driver version: 535.161.08
+cuDNN version: Probably one of the following:
+/usr/lib/x86_64-linux-gnu/libcudnn.so.8.9.5
+/usr/lib/x86_64-linux-gnu/libcudnn_adv_infer.so.8.9.5
+/usr/lib/x86_64-linux-gnu/libcudnn_adv_train.so.8.9.5
+/usr/lib/x86_64-linux-gnu/libcudnn_cnn_infer.so.8.9.5
+/usr/lib/x86_64-linux-gnu/libcudnn_cnn_train.so.8.9.5
+/usr/lib/x86_64-linux-gnu/libcudnn_ops_infer.so.8.9.5
+/usr/lib/x86_64-linux-gnu/libcudnn_ops_train.so.8.9.5
 HIP runtime version: N/A
 MIOpen runtime version: N/A
 Is XNNPACK available: True
 
 CPU:
-Architecture:                         x86_64
-CPU op-mode(s):                       32-bit, 64-bit
-Address sizes:                        52 bits physical, 57 bits virtual
-Byte Order:                           Little Endian
-CPU(s):                               384
-On-line CPU(s) list:                  0-383
-Vendor ID:                            AuthenticAMD
-Model name:                           AMD EPYC 9654 96-Core Processor
-CPU family:                           25
-Model:                                17
-Thread(s) per core:                   2
-Core(s) per socket:                   96
-Socket(s):                            2
-Stepping:                             1
-Frequency boost:                      enabled
-CPU max MHz:                          2400.0000
-CPU min MHz:                          1500.0000
-BogoMIPS:                             4800.02
-Flags:                                fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good amd_lbr_v2 nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba perfmon_v2 ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk avx512_bf16 clzero irperf xsaveerptr rdpru wbnoinvd amd_ppin cppc amd_ibpb_ret arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif x2avic v_spec_ctrl vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq la57 rdpid overflow_recov succor smca fsrm flush_l1d debug_swap ibpb_exit_to_user
-Virtualization:                       AMD-V
-L1d cache:                            6 MiB (192 instances)
-L1i cache:                            6 MiB (192 instances)
-L2 cache:                             192 MiB (192 instances)
-L3 cache:                             768 MiB (24 instances)
-NUMA node(s):                         2
-NUMA node0 CPU(s):                    0-95,192-287
-NUMA node1 CPU(s):                    96-191,288-383
-Vulnerability Gather data sampling:   Not affected
-Vulnerability Itlb multihit:          Not affected
-Vulnerability L1tf:                   Not affected
-Vulnerability Mds:                    Not affected
-Vulnerability Meltdown:               Not affected
-Vulnerability Mmio stale data:        Not affected
-Vulnerability Reg file data sampling: Not affected
-Vulnerability Retbleed:               Not affected
-Vulnerability Spec rstack overflow:   Mitigation; Safe RET
-Vulnerability Spec store bypass:      Mitigation; Speculative Store Bypass disabled via prctl
-Vulnerability Spectre v1:             Mitigation; usercopy/swapgs barriers and __user pointer sanitization
-Vulnerability Spectre v2:             Mitigation; Enhanced / Automatic IBRS; IBPB conditional; STIBP always-on; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
-Vulnerability Srbds:                  Not affected
-Vulnerability Tsx async abort:        Not affected
-Vulnerability Vmscape:                Mitigation; IBPB before exit to userspace
+Architecture:                       x86_64
+CPU op-mode(s):                     32-bit, 64-bit
+Address sizes:                      43 bits physical, 48 bits virtual
+Byte Order:                         Little Endian
+CPU(s):                             256
+On-line CPU(s) list:                0-255
+Vendor ID:                          AuthenticAMD
+Model name:                         AMD EPYC 7742 64-Core Processor
+CPU family:                         23
+Model:                              49
+Thread(s) per core:                 2
+Core(s) per socket:                 64
+Socket(s):                          2
+Stepping:                           0
+Frequency boost:                    enabled
+CPU max MHz:                        2250.0000
+CPU min MHz:                        1500.0000
+BogoMIPS:                           4491.80
+Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local clzero irperf xsaveerptr rdpru wbnoinvd amd_ppin arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl umip rdpid overflow_recov succor smca sme sev sev_es
+Virtualization:                     AMD-V
+L1d cache:                          4 MiB (128 instances)
+L1i cache:                          4 MiB (128 instances)
+L2 cache:                           64 MiB (128 instances)
+L3 cache:                           512 MiB (32 instances)
+NUMA node(s):                       8
+NUMA node0 CPU(s):                  0-15,128-143
+NUMA node1 CPU(s):                  16-31,144-159
+NUMA node2 CPU(s):                  32-47,160-175
+NUMA node3 CPU(s):                  48-63,176-191
+NUMA node4 CPU(s):                  64-79,192-207
+NUMA node5 CPU(s):                  80-95,208-223
+NUMA node6 CPU(s):                  96-111,224-239
+NUMA node7 CPU(s):                  112-127,240-255
+Vulnerability Gather data sampling: Not affected
+Vulnerability Itlb multihit:        Not affected
+Vulnerability L1tf:                 Not affected
+Vulnerability Mds:                  Not affected
+Vulnerability Meltdown:             Not affected
+Vulnerability Mmio stale data:      Not affected
+Vulnerability Retbleed:             Mitigation; untrained return thunk; SMT enabled with STIBP protection
+Vulnerability Spec rstack overflow: Mitigation; safe RET
+Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:           Mitigation; Retpolines, IBPB conditional, STIBP always-on, RSB filling, PBRSB-eIBRS Not affected
+Vulnerability Srbds:                Not affected
+Vulnerability Tsx async abort:      Not affected
 
 Versions of relevant libraries:
-[pip3] numpy==2.4.6
-[pip3] nvidia-cublas-cu12==12.6.4.1
-[pip3] nvidia-cuda-cupti-cu12==12.6.80
-[pip3] nvidia-cuda-nvrtc-cu12==12.6.77
-[pip3] nvidia-cuda-runtime-cu12==12.6.77
-[pip3] nvidia-cudnn-cu12==9.5.1.17
-[pip3] nvidia-cufft-cu12==11.3.0.4
-[pip3] nvidia-curand-cu12==10.3.7.77
-[pip3] nvidia-cusolver-cu12==11.7.1.2
-[pip3] nvidia-cusparse-cu12==12.5.4.2
-[pip3] nvidia-cusparselt-cu12==0.6.3
-[pip3] nvidia-nccl-cu12==2.26.2
-[pip3] nvidia-nvjitlink-cu12==12.6.85
-[pip3] nvidia-nvtx-cu12==12.6.77
-[pip3] torch==2.7.0+cu126
-[pip3] torchaudio==2.7.0+cu126
-[pip3] torchvision==0.22.0+cu126
-[pip3] triton==3.3.0
-[conda] numpy                     2.4.6           py311h2e04523_0    conda-forge
-[conda] nvidia-cublas-cu12        12.6.4.1                 pypi_0    pypi
-[conda] nvidia-cuda-cupti-cu12    12.6.80                  pypi_0    pypi
-[conda] nvidia-cuda-nvrtc-cu12    12.6.77                  pypi_0    pypi
-[conda] nvidia-cuda-runtime-cu12  12.6.77                  pypi_0    pypi
-[conda] nvidia-cudnn-cu12         9.5.1.17                 pypi_0    pypi
-[conda] nvidia-cufft-cu12         11.3.0.4                 pypi_0    pypi
-[conda] nvidia-curand-cu12        10.3.7.77                pypi_0    pypi
-[conda] nvidia-cusolver-cu12      11.7.1.2                 pypi_0    pypi
-[conda] nvidia-cusparse-cu12      12.5.4.2                 pypi_0    pypi
-[conda] nvidia-cusparselt-cu12    0.6.3                    pypi_0    pypi
-[conda] nvidia-nccl-cu12          2.26.2                   pypi_0    pypi
-[conda] nvidia-nvjitlink-cu12     12.6.85                  pypi_0    pypi
-[conda] nvidia-nvtx-cu12          12.6.77                  pypi_0    pypi
-[conda] torch                     2.7.0+cu126              pypi_0    pypi
-[conda] torchaudio                2.7.0+cu126              pypi_0    pypi
-[conda] torchvision               0.22.0+cu126             pypi_0    pypi
-[conda] triton                    3.3.0                    pypi_0    pypi
+[pip3] numpy==1.26.4
+[pip3] torch==2.5.1+cu121
+[pip3] torchaudio==2.5.1+cu121
+[pip3] torchvision==0.20.1+cu121
+[pip3] triton==3.1.0
+[conda] No relevant packages

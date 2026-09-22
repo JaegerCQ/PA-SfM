@@ -20,10 +20,10 @@ FIXED_POINT_INV_SCALE = 1.0 / FIXED_POINT_SCALE
 # 0. 命令行参数
 # ===============================================================
 parser = argparse.ArgumentParser()
-parser.add_argument("--device-id", type=int, default=1, help="CUDA 卡号")
+parser.add_argument("--device-id", type=int, default=0, help="CUDA 卡号")
 parser.add_argument("--sensor-location", type=str, required=True, help="输入探头坐标文件")
 parser.add_argument("--ckpt-dir", type=str, required=True, help="checkpoint 根目录")
-parser.add_argument("--ckpt-index", type=int, default=-4, help="checkpoint 目录索引，默认 -4 保持原逻辑")
+parser.add_argument("--ckpt-index", type=int, default=-1, help="checkpoint 目录索引，默认 -1 使用最后一个检查点")
 parser.add_argument("--output", type=str, required=True, help="输出信号 txt 文件路径")
 args = parser.parse_args()
 

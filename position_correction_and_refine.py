@@ -19,10 +19,10 @@ SEED = seed_everything(DEFAULT_SEED)
 parser = argparse.ArgumentParser()
 parser.add_argument("--pose-id", type=int, required=True, help="当前 pose ID，例如 56")
 parser.add_argument("--ckpt-dir", type=str, required=True, help="用于 refine 的 checkpoint 目录，例如 checkpoints_07")
-parser.add_argument("--device-id", type=int, default=1, help="CUDA 卡号，默认 1")
+parser.add_argument("--device-id", type=int, default=0, help="CUDA 卡号，默认 0")
 parser.add_argument("--sensor-location", type=str, required=True, help="参考探头坐标文件")
 parser.add_argument("--base-pose-id", type=int, default=None, help="当前定位基于哪个 base pose；默认 pose-id - 1")
-parser.add_argument("--num-localization-parts", type=int, default=32, help="localization 分片数量")
+parser.add_argument("--num-localization-parts", type=int, default=1, help="localization 分片数量")
 args = parser.parse_args()
 
 # ===============================================================
