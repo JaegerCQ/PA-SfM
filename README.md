@@ -26,8 +26,6 @@ python -m pip install \
   -r locks/requirements.pip-hash-lock.txt
 ```
 
-On the current machine, the tested environment already exists as `cryoet`. Run `conda activate cryoet` and proceed directly to the pipeline; use this activation command in place of `conda activate PA_SfM` below.
-
 ## Data Layout   
 
 (Note: The data was acquired with 3D-PanoPACT system from Professor Junhui Shi and Dr. Xuanhao Wang. If you need to use this data in any context, please make sure to contact us.)
