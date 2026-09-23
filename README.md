@@ -53,9 +53,9 @@ The script enables batched Triton localization, vectorized time-gradient scatter
 
 For the default 1024-sensor volume fit, each backward program owns a source block. It accumulates each sensor lane's already-quantized integers throughout the loop, reduces the four lanes once after the loop, and writes once without atomics. This removes repeated intermediate reductions while preserving the per-pair floating calculation and quantization.
 
-`TRAIN_FORWARD_PROJECTOR=auto` selects the shared histogram on SM80 GPUs when the grid size is divisible by 16; other configurations retain the original Triton projector. Runtime CUDA compilation uses NVRTC 12.1.105 from the already pinned `nvidia-cuda-nvrtc-cu12` package and the NVIDIA driver. No separate CUDA toolkit installation or environment-lock changes are required.
+`TRAIN_FORWARD_PROJECTOR=auto` selects the shared histogram on SM80 GPUs when the grid size is divisible by 16; other configurations retain the original Triton projector. Runtime CUDA compilation uses NVRTC 12.1.105 from the already pinned `nvidia-cuda-nvrtc-cu12` package and the NVIDIA driver.
 
-Localization uses batches of 16 sensors, a cache covering the full sigma schedule, and CUDA Graph replay of all 600 original Adam steps. Rigid refinement uses a fused continuous Gaussian operator with analytic position gradients, skipping blocks whose Gaussian exponentials are already zero in float32. The volume grid, 100 training epochs, 4096 coarse candidates, 15 localization starts, 600 localization steps, 100 refinement epochs, and environment locks are unchanged. No additional environment exports are needed.
+Localization uses batches of 16 sensors, a cache covering the full sigma schedule, and CUDA Graph replay of all 600 original Adam steps. Rigid refinement uses a fused continuous Gaussian operator with analytic position gradients, skipping blocks whose Gaussian exponentials are already zero in float32.
 
 On one A100-SXM4-40GB, a **fresh two-pose run measured 287.8 seconds (4 minutes 48 seconds)** using the normal shell pipeline with `START_POSE=0 END_POSE=1 TARGET_POSE=0`. Both volumes were freshly trained for 100 epochs, and their volume-training stages took **102 and 102 seconds**.
 
