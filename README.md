@@ -49,11 +49,30 @@ START_POSE=0
 END_POSE=9
 ```
 
-The script enables batched Triton localization, vectorized time-gradient scattering, sensor-fast forward projection, and sensor-tiled backward projection by default. No additional environment exports are needed.
+The script enables batched Triton localization, vectorized time-gradient scattering, and sensor-tiled backward projection by default. On the tested A100, volume-training forward projection groups sources into 16 x 16 x 16 cubes. Each 64-thread GPU block uses two independent 256-bin shared-memory histograms, one per warp, to reduce contention. Contributions are quantized individually to int64 before accumulation; the two histograms are merged into global memory after synchronization. Contributions outside the local caches go directly to global memory. The same projector is used for full signal generation.
 
-The complete two-pose pipeline (pose000 + pose001) was measured at **13 minutes 7 seconds** on one A100-SXM4-40GB, including approximately **280 seconds for each pose's volume training**. And for one new pose, the runtime is about only **450 seconds**. The runtime for all 10 poses is approximately **1 hour 13 minutes**.
+For the default 1024-sensor volume fit, each backward program owns a source block. It accumulates each sensor lane's already-quantized integers throughout the loop, reduces the four lanes once after the loop, and writes once without atomics. This removes repeated intermediate reductions while preserving the per-pair floating calculation and quantization.
 
-To run only the measured two-pose case, set `END_POSE=1` in the script or launch it with `END_POSE=1 bash ./run_group3_pose_range.sh`.
+`TRAIN_FORWARD_PROJECTOR=auto` selects the shared histogram on SM80 GPUs when the grid size is divisible by 16; other configurations retain the original Triton projector. Runtime CUDA compilation uses NVRTC 12.1.105 from the already pinned `nvidia-cuda-nvrtc-cu12` package and the NVIDIA driver. No separate CUDA toolkit installation or environment-lock changes are required.
+
+Localization uses batches of 16 sensors, a cache covering the full sigma schedule, and CUDA Graph replay of all 600 original Adam steps. Rigid refinement uses a fused continuous Gaussian operator with analytic position gradients, skipping blocks whose Gaussian exponentials are already zero in float32. The volume grid, 100 training epochs, 4096 coarse candidates, 15 localization starts, 600 localization steps, 100 refinement epochs, and environment locks are unchanged. No additional environment exports are needed.
+
+On one A100-SXM4-40GB, a **fresh two-pose run measured 287.8 seconds (4 minutes 48 seconds)** using the normal shell pipeline with `START_POSE=0 END_POSE=1 TARGET_POSE=0`. Both volumes were freshly trained for 100 epochs, and their volume-training stages took **102 and 102 seconds**.
+
+| Stage | Measured seconds |
+| --- | ---: |
+| Initial pose000 DAS reconstruction | 5 |
+| Pose000 volume training, 100 epochs | 102 |
+| Pose000 full signal generation | 6 |
+| Pose001 volume training, 100 epochs | 102 |
+| Pose001 full signal generation | 6 |
+| Pose001 localization, 256 sensors | 42 |
+| Pose001 RANSAC and rigid refinement, 100 epochs | 19 |
+| Two-pose joint DAS reconstruction | 6 |
+
+Within this run, adding pose001 after pose000 took **175 seconds (2 minutes 55 seconds)** according to the shell's adaptive-pipeline timer. The runtime for all 10 poses is only approximately 28 minutes.
+
+To run the two-pose case from scratch, set `END_POSE=1` in the script or launch it with `END_POSE=1 bash ./run_group3_pose_range.sh`. For diagnostic comparisons, `TRAIN_FORWARD_PROJECTOR=triton` selects the original Triton forward projector, `LOCALIZATION_FINE_EXECUTION=eager` retains the original localization loop, and `REFINE_BACKEND=torch` retains the original direct PyTorch refinement operator.
 
 Setting `START_POSE` above zero resumes an existing run and requires the preceding pose's checkpoint and recovered coordinates in this directory.
 

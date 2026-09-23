@@ -11,7 +11,12 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from lib.refine_direct import direct_gaussian
+
 SEED = seed_everything(DEFAULT_SEED)
+REFINE_BACKEND = os.environ.get("REFINE_BACKEND", "triton").strip().lower()
+if REFINE_BACKEND not in {"triton", "torch"}:
+    raise ValueError("REFINE_BACKEND must be 'triton' or 'torch'")
 
 # ===============================================================
 # 命令行参数
@@ -325,17 +330,17 @@ if os.path.exists(CKPT_PATH):
 
     GRID_SIZE = 400
     coords = (np.arange(GRID_SIZE) - (GRID_SIZE - 1) / 2.0) * 0.1e-3
-    xg, yg, zg = np.meshgrid(coords, coords, coords, indexing="ij")
-
-    src_x_raw = torch.tensor(xg.ravel(), device=device, dtype=torch.float32).contiguous()
-    src_y_raw = torch.tensor(yg.ravel(), device=device, dtype=torch.float32).contiguous()
-    src_z_raw = torch.tensor(zg.ravel(), device=device, dtype=torch.float32).contiguous()
+    # Index the same float32 axis table without allocating three 400^3 arrays.
+    coords_tensor = torch.tensor(coords, device=device, dtype=torch.float32)
 
     n_keep = int(Pc_raw.numel() * KEEP_RATIO)
     val_top, idx_top = torch.topk(torch.abs(Pc_raw), n_keep)
 
     Pc_fixed = Pc_raw[idx_top].contiguous()
-    xyz_src = torch.stack([src_x_raw[idx_top], src_y_raw[idx_top], src_z_raw[idx_top]], dim=1).contiguous()
+    ix = idx_top // (GRID_SIZE * GRID_SIZE)
+    iy = (idx_top // GRID_SIZE) % GRID_SIZE
+    iz = idx_top % GRID_SIZE
+    xyz_src = torch.stack([coords_tensor[ix], coords_tensor[iy], coords_tensor[iz]], dim=1).contiguous()
 else:
     raise FileNotFoundError(f"找不到模型文件: {CKPT_PATH}")
 
@@ -363,6 +368,7 @@ init_pos_tensor = torch.tensor(init_pos_np, dtype=torch.float32, device=device)
 active_indices_np = INCLUDE_IDS
 active_indices_tensor = torch.tensor(active_indices_np, dtype=torch.long, device=device)
 
+print(f"[CONFIG] Refinement backend: {REFINE_BACKEND}")
 print(f"[CONFIG] 总探头数: {NUM_TOTAL_SENSORS}")
 print(f"[CONFIG] 信号已降采样，当前截取维度: {signals_target.shape[1]}")
 print(f"[CONFIG] 包含探头ID数量: {len(INCLUDE_IDS)}")
@@ -397,7 +403,7 @@ def build_rotation_matrix(r):
     return Rz @ Ry @ Rx
 
 
-def vectorized_acoustic_simulation(sens_pos_batch, src_pos, Pc, t_start, n_time, dt, vs, a):
+def _reference_acoustic_simulation(sens_pos_batch, src_pos, Pc, t_start, n_time, dt, vs, a):
     diff = sens_pos_batch.unsqueeze(1) - src_pos.unsqueeze(0)
     r = torch.norm(diff, dim=2) + 1e-12
 
@@ -409,6 +415,22 @@ def vectorized_acoustic_simulation(sens_pos_batch, src_pos, Pc, t_start, n_time,
 
     signals = torch.sum(amplitude * exponent, dim=1)
     return signals
+
+
+_DIRECT_CT_CACHE = {}
+
+
+def vectorized_acoustic_simulation(sens_pos_batch, src_pos, Pc, t_start, n_time, dt, vs, a):
+    if REFINE_BACKEND == "torch" or sens_pos_batch.device.type != "cuda":
+        return _reference_acoustic_simulation(sens_pos_batch, src_pos, Pc, t_start, n_time, dt, vs, a)
+    key = (str(sens_pos_batch.device), t_start, n_time, float(dt), float(vs))
+    ct = _DIRECT_CT_CACHE.get(key)
+    if ct is None:
+        # Preserve the reference's time arithmetic order, not (vs * dt) * t.
+        t_global = t_start + torch.arange(n_time, device=sens_pos_batch.device, dtype=torch.float32)
+        ct = vs * (t_global * dt)
+        _DIRECT_CT_CACHE[key] = ct
+    return direct_gaussian(sens_pos_batch, src_pos, Pc, ct, a)
 
 
 def batch_negative_correlation_loss(pred_batch, target_batch):

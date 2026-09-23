@@ -9,6 +9,7 @@ from lib.runtime_config import (
     seed_everything,
     torch_generator,
 )
+from lib.training_forward_looped import project_looped_into
 from lib.time_scatter import scatter_time_gradient, time_scatter_indices_unique
 
 import numpy as np
@@ -451,26 +452,34 @@ class GaussianSimFunction(torch.autograd.Function):
                 device=Pc.device,
                 dtype=torch.int64,
             )
-            kde_project_kernel_fixed[grid](
-                Pc,
-                sens_x, sens_y, sens_z,
-                hist_q,
-                Pc.numel(),
-                KDE_N_BINS,
-                KDE_R_MIN,
-                KDE_DELTA,
-                voxel_size,
-                center,
-                hist_q.stride(0),
-                hist_q.stride(1),
-                FIXED_POINT_SCALE,
-                BLOCK_K=BLOCK_K,
-                GRID_SIZE=GRID_SIZE,
-                SENSOR_FAST=sensor_fast,
-                N_SENSORS=sens_x.numel(),
-                num_warps=4,
-                num_stages=4,
-            )
+            if sensor_fast:
+                project_looped_into(
+                    Pc, sens_x, sens_y, sens_z, hist_q,
+                    grid_size=GRID_SIZE, voxel_size=voxel_size, center=center,
+                    r_min=KDE_R_MIN, delta_r=KDE_DELTA, fixed_scale=FIXED_POINT_SCALE,
+                    tiles_per_cta=4, relaxed=True,
+                )
+            else:
+                kde_project_kernel_fixed[grid](
+                    Pc,
+                    sens_x, sens_y, sens_z,
+                    hist_q,
+                    Pc.numel(),
+                    KDE_N_BINS,
+                    KDE_R_MIN,
+                    KDE_DELTA,
+                    voxel_size,
+                    center,
+                    hist_q.stride(0),
+                    hist_q.stride(1),
+                    FIXED_POINT_SCALE,
+                    BLOCK_K=BLOCK_K,
+                    GRID_SIZE=GRID_SIZE,
+                    SENSOR_FAST=sensor_fast,
+                    N_SENSORS=sens_x.numel(),
+                    num_warps=4,
+                    num_stages=4,
+                )
             hist = hist_q.to(torch.float32) * FIXED_POINT_INV_SCALE
             del hist_q
         else:

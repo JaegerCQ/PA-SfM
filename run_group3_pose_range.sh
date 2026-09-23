@@ -31,8 +31,11 @@ export REPRO_DETERMINISTIC_WARN_ONLY="${REPRO_DETERMINISTIC_WARN_ONLY:-1}"
 export REPRO_ALLOW_TF32="${REPRO_ALLOW_TF32:-1}"
 export REPRO_STRICT_ATOMICS="${REPRO_STRICT_ATOMICS:-1}"
 export REPRO_FIXED_POINT_SCALE="${REPRO_FIXED_POINT_SCALE:-10000000000.0}"
+export REFINE_BACKEND="${REFINE_BACKEND:-triton}"
+export LOCALIZATION_FINE_EXECUTION="${LOCALIZATION_FINE_EXECUTION:-auto}"
 export LOCALIZATION_PROJECTOR="${LOCALIZATION_PROJECTOR:-triton}"
 export TRAIN_TIME_SCATTER="${TRAIN_TIME_SCATTER:-vectorized}"
+export TRAIN_FORWARD_PROJECTOR="${TRAIN_FORWARD_PROJECTOR:-auto}"
 export TRAIN_FORWARD_LAYOUT="${TRAIN_FORWARD_LAYOUT:-sensor_fast}"
 export TRAIN_BACKWARD_BACKEND="${TRAIN_BACKWARD_BACKEND:-sensor_tiled}"
 
@@ -511,7 +514,9 @@ check_required_files() {
     for required_file in differentiable_radiation_embedding.py forward_propagation.py \
         position_correction_and_refine.py sequential_correction.py joint_recon.py \
         lib/forward.py lib/forward_batch.py lib/forward_triton.py lib/runtime_config.py \
-        lib/time_scatter.py lib/training_backward_tiled.py; do
+        lib/time_scatter.py lib/training_backward_tiled.py lib/training_forward_looped.py \
+        lib/training_backward_grouped.py lib/refine_direct.py lib/localization_graph.py \
+        lib/training_forward_shared.py lib/training_forward_shared.cu lib/nvrtc_driver.py; do
         if [ ! -f "$required_file" ]; then
             echo "[ERROR] Missing pipeline file: $required_file" >&2
             exit 1
@@ -713,8 +718,11 @@ echo "[INFO] NUM_GPUS=${NUM_GPUS}"
 echo "[INFO] GPU_IDS=${GPU_IDS[*]}"
 echo "[INFO] LOCALIZATION_BACKEND=${LOCALIZATION_BACKEND}"
 echo "[INFO] LOCALIZATION_SCRIPT=${LOCALIZATION_SCRIPT}"
+echo "[INFO] REFINE_BACKEND=${REFINE_BACKEND}"
+echo "[INFO] LOCALIZATION_FINE_EXECUTION=${LOCALIZATION_FINE_EXECUTION}"
 echo "[INFO] LOCALIZATION_PROJECTOR=${LOCALIZATION_PROJECTOR}"
 echo "[INFO] TRAIN_TIME_SCATTER=${TRAIN_TIME_SCATTER}"
+echo "[INFO] TRAIN_FORWARD_PROJECTOR=${TRAIN_FORWARD_PROJECTOR}"
 echo "[INFO] TRAIN_FORWARD_LAYOUT=${TRAIN_FORWARD_LAYOUT}"
 echo "[INFO] TRAIN_BACKWARD_BACKEND=${TRAIN_BACKWARD_BACKEND}"
 echo "[INFO] PROCS_PER_GPU=${PROCS_PER_GPU}"
@@ -745,7 +753,7 @@ import numpy
 import scipy
 import torch
 import triton
-from lib import forward_batch, forward_triton, time_scatter, training_backward_tiled
+from lib import forward_batch, forward_triton, time_scatter, training_backward_tiled, training_forward_looped, training_backward_grouped, refine_direct, localization_graph, training_forward_shared, nvrtc_driver
 
 if not torch.cuda.is_available():
     raise SystemExit("[ERROR] CUDA is unavailable in the selected Python environment")

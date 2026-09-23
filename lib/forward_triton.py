@@ -38,21 +38,26 @@ def _geometry(sensors, sources, intensities, ids, sensor_id, valid,
 @triton.jit
 def _project(sensors, sources, intensities, histogram, n_sources,
              n_bins, delta_bin, r_min, fixed_scale,
-             STRICT: tl.constexpr, BLOCK: tl.constexpr):
-    block, sensor_id = tl.program_id(0), tl.program_id(1)
-    ids = block * BLOCK + tl.arange(0, BLOCK)
-    valid = ids < n_sources
-    _, _, _, _, _, w, i0, alpha = _geometry(
-        sensors, sources, intensities, ids, sensor_id, valid,
-        delta_bin, r_min, n_bins)
-    val0, val1 = (1.0 - alpha) * w, alpha * w
-    if STRICT:
-        v0, v1 = val0 * fixed_scale, val1 * fixed_scale
-        val0 = tl.where(v0 >= 0.0, tl.floor(v0 + 0.5), -tl.floor(-v0 + 0.5)).to(tl.int64)
-        val1 = tl.where(v1 >= 0.0, tl.floor(v1 + 0.5), -tl.floor(-v1 + 0.5)).to(tl.int64)
-    base = histogram + sensor_id * (n_bins + 1)
-    tl.atomic_add(base + i0, val0, mask=valid, sem="relaxed")
-    tl.atomic_add(base + i0 + 1, val1, mask=valid, sem="relaxed")
+             STRICT: tl.constexpr, BLOCK: tl.constexpr,
+             N_SENSORS: tl.constexpr, TILES_PER_CTA: tl.constexpr):
+    pid = tl.program_id(0)
+    sensor_id = pid % N_SENSORS
+    group = pid // N_SENSORS
+    for tile in range(TILES_PER_CTA):
+        block = group * TILES_PER_CTA + tile
+        ids = block * BLOCK + tl.arange(0, BLOCK)
+        valid = ids < n_sources
+        _, _, _, _, _, w, i0, alpha = _geometry(
+            sensors, sources, intensities, ids, sensor_id, valid,
+            delta_bin, r_min, n_bins)
+        val0, val1 = (1.0 - alpha) * w, alpha * w
+        if STRICT:
+            v0, v1 = val0 * fixed_scale, val1 * fixed_scale
+            val0 = tl.where(v0 >= 0.0, tl.floor(v0 + 0.5), -tl.floor(-v0 + 0.5)).to(tl.int64)
+            val1 = tl.where(v1 >= 0.0, tl.floor(v1 + 0.5), -tl.floor(-v1 + 0.5)).to(tl.int64)
+        base = histogram + sensor_id * (n_bins + 1)
+        tl.atomic_add(base + i0, val0, mask=valid, sem="relaxed")
+        tl.atomic_add(base + i0 + 1, val1, mask=valid, sem="relaxed")
 
 
 @triton.jit
@@ -84,9 +89,10 @@ class _HistogramFunction(torch.autograd.Function):
         n_blocks = triton.cdiv(pc.numel(), block)
         hist = torch.zeros((sensors.shape[0], n_bins + 1), device=pc.device,
                            dtype=torch.int64 if strict else torch.float32)
-        _project[(n_blocks, sensors.shape[0])](
+        _project[(triton.cdiv(n_blocks, 4) * sensors.shape[0],)](
             sensors, sources, pc, hist, pc.numel(), n_bins, delta_bin, r_min,
             FIXED_POINT_SCALE, STRICT=strict, BLOCK=block,
+            N_SENSORS=sensors.shape[0], TILES_PER_CTA=4,
             num_warps=4, enable_fp_fusion=False)
         if strict:
             hist = hist[:, :n_bins].to(torch.float32) * FIXED_POINT_INV_SCALE

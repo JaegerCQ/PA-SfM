@@ -6,6 +6,8 @@ checked against the reference on A100 with Triton 3.1.0. Revalidate numerical
 equivalence with the accompanying benchmarks when changing GPU/compiler.
 """
 
+from .training_backward_grouped import project_gradient_tiled as project_gradient_grouped
+
 import torch
 import triton
 import triton.language as tl
@@ -67,7 +69,9 @@ def kde_project_backward_sensor_tiled(
     q = tl.where(v >= 0.0, tl.floor(v + 0.5), -tl.floor(-v + 0.5)).to(tl.int64)
     q = tl.where(valid, q, 0)
     q_sum = tl.sum(q, axis=0)
-    tl.atomic_add(grad_pc_ptr + k_offsets, q_sum, mask=mask_k)
+    # No intermediate reads; the same-stream consumer runs after this kernel.
+    # Relax ordering only, retaining GPU scope and exact integer accumulation.
+    tl.atomic_add(grad_pc_ptr + k_offsets, q_sum, mask=mask_k, sem="relaxed")
 
 
 def project_backward_fixed_tiled(sens_x, sens_y, sens_z, grad_hist, n_sources,
@@ -103,6 +107,13 @@ def project_gradient_tiled(sens_x, sens_y, sens_z, grad_hist, n_sources,
     """Training integration entry point; returns fixed-point int64 gradients."""
     if block_k != 128:
         raise ValueError("The tiled adjoint preserves the reference BLOCK_K=128")
+    if block_s == 4 and num_warps == 4 and sens_x.numel() == 1024:
+        return project_gradient_grouped(
+            sens_x, sens_y, sens_z, grad_hist, n_sources, n_bins, r_min,
+            delta_r, voxel_size, center, fixed_scale=fixed_scale,
+            grid_size=grid_size, block_k=block_k, block_s=block_s,
+            num_warps=num_warps, groups_per_program=256,
+        )
     return project_backward_fixed_tiled(
         sens_x, sens_y, sens_z, grad_hist, n_sources, n_bins, r_min, delta_r,
         voxel_size, center, fixed_scale=fixed_scale, grid_size=grid_size,

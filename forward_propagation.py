@@ -254,23 +254,12 @@ def run_forward_inference_kde(Pc, sens_x, sens_y, sens_z):
             device=Pc.device,
             dtype=torch.int64,
         )
-        kde_project_kernel_fixed[grid](
-            Pc,
-            sens_x, sens_y, sens_z,
-            hist_q,
-            Pc.numel(),
-            KDE_N_BINS,
-            KDE_R_MIN,
-            KDE_DELTA,
-            voxel_size,
-            center,
-            hist_q.stride(0),
-            hist_q.stride(1),
-            FIXED_POINT_SCALE,
-            BLOCK_K=BLOCK_K,
-            GRID_SIZE=GRID_SIZE,
-            num_warps=4,
-            num_stages=4,
+        from lib.training_forward_looped import project_looped_into
+        project_looped_into(
+            Pc, sens_x, sens_y, sens_z, hist_q,
+            grid_size=GRID_SIZE, voxel_size=voxel_size, center=center,
+            r_min=KDE_R_MIN, delta_r=KDE_DELTA, fixed_scale=FIXED_POINT_SCALE,
+            tiles_per_cta=4, relaxed=True,
         )
         hist = hist_q.to(torch.float32) * FIXED_POINT_INV_SCALE
         del hist_q

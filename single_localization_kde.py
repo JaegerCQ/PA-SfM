@@ -8,6 +8,7 @@ import argparse
 from functools import partial
 import json
 import os
+from types import SimpleNamespace
 import time
 from pathlib import Path
 
@@ -96,9 +97,12 @@ def parse_args():
     ap.add_argument("--use_kde", action="store_true", help="compatibility flag; this backend always uses KDE")
     ap.add_argument("--gpu", type=int, default=0)
     ap.add_argument("--coarse_batch_size", type=int, default=32)
-    ap.add_argument("--sensor_batch_size", type=int, default=4)
+    ap.add_argument("--sensor_batch_size", type=int, default=16)
     ap.add_argument("--projector", choices=("torch", "triton"),
                     default=os.environ.get("LOCALIZATION_PROJECTOR", "triton"))
+    ap.add_argument("--fine_execution", choices=("auto", "eager", "graph"),
+                    default=os.environ.get("LOCALIZATION_FINE_EXECUTION", "auto"),
+                    help="auto captures the full 600-step CUDA/Triton schedule; eager retains the reference loop")
     args = ap.parse_args()
     if min(args.coarse_batch_size, args.sensor_batch_size, args.total_epochs, args.top_k) < 1:
         ap.error("batch sizes, total_epochs and top_k must be positive")
@@ -113,6 +117,16 @@ def main():
     started = time.perf_counter()
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     FORWARD_BATCH = partial(kde_acoustic_sim_batch, projector=args.projector)
+    graph_supported = device.type == "cuda" and args.projector == "triton" and args.total_epochs == 600
+    if args.fine_execution == "graph" and not graph_supported:
+        raise ValueError("Graph execution requires CUDA, the Triton projector and 600 epochs")
+    use_graph = graph_supported and args.fine_execution != "eager"
+    fine_graphs = {}
+    if use_graph:
+        from lib.localization_graph import FineSearchGraph
+        graph_model = SimpleNamespace(FORWARD_BATCH=FORWARD_BATCH, VS_DEFAULT=VS_DEFAULT,
+                                      neg_corr_loss_batch=neg_corr_loss_batch)
+    print(f"[CONFIG] fine_execution={'graph' if use_graph else 'eager'}", flush=True)
     print(f"[INIT] device={device} backend=batch projector={args.projector} sensor_batch={args.sensor_batch_size} "
           f"coarse_batch={args.coarse_batch_size}", flush=True)
     xyz_src, Pc = load_phantom_topk_fast(args.ckpt, device, keep_ratio=args.keep_ratio)
@@ -150,9 +164,20 @@ def main():
         subset = sensor_ids[offset:offset + args.sensor_batch_size]
         initial = starts[offset:offset + len(subset)].reshape(-1, 3)
         target_batch = targets[offset:offset + len(subset)].repeat_interleave(args.top_k, dim=0)
-        positions, losses = fine_search_batch(
-            xyz_src, Pc, target_batch, initial, args.total_epochs, args.lr,
-            args.sigma_start, args.sigma_target, args.t_start, n_time, args.delta_t)
+        if use_graph:
+            # Each process uses one fixed source field and schedule. Keep a
+            # separate graph for a shorter final batch, when one is present.
+            shape = tuple(initial.shape)
+            if shape not in fine_graphs:
+                fine_graphs[shape] = FineSearchGraph(
+                    graph_model, xyz_src, Pc, target_batch, initial,
+                    args.total_epochs, args.lr, args.sigma_start, args.sigma_target,
+                    args.t_start, n_time, args.delta_t)
+            positions, losses = fine_graphs[shape](target_batch, initial)
+        else:
+            positions, losses = fine_search_batch(
+                xyz_src, Pc, target_batch, initial, args.total_epochs, args.lr,
+                args.sigma_start, args.sigma_target, args.t_start, n_time, args.delta_t)
         positions = positions.reshape(len(subset), args.top_k, 3)
         losses = losses.reshape(len(subset), args.top_k)
         # As in the legacy `loss < best_loss` loop, ignore failed starts when
@@ -174,7 +199,8 @@ def main():
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     np.savetxt(out, preds, fmt="%.6f", header="Predicted x, y, z (meters); NaN = sensor not solved")
-    report = {"backend": "batch", "arguments": vars(args), "coarse_seconds": coarse_seconds,
+    report = {"backend": "batch", "fine_execution": "graph" if use_graph else "eager",
+              "graph_setup_seconds": sum(g.setup_seconds for g in fine_graphs.values()), "arguments": vars(args), "coarse_seconds": coarse_seconds,
               "fine_seconds": time.perf_counter() - stage,
               "total_seconds": time.perf_counter() - started,
               "sensor_ids": sensor_ids, "correlations": correlations[sensor_ids].tolist(),

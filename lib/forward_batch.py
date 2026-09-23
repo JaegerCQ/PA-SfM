@@ -25,7 +25,7 @@ from .forward import (
 )
 
 
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=512)
 def _kernel(sigma, delta_bin, device, dtype):
     # A cache may first be populated during inference and later used in autograd.
     # Ordinary no-grad tensors (not inference tensors) support both usages.
